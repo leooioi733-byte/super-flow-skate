@@ -6,6 +6,8 @@ const androidDir = path.join(root, 'android');
 const manifestPath = path.join(androidDir, 'app', 'src', 'main', 'AndroidManifest.xml');
 const stylesPath = path.join(androidDir, 'app', 'src', 'main', 'res', 'values', 'styles.xml');
 const appGradlePath = path.join(androidDir, 'app', 'build.gradle');
+const gradlePropsPath = path.join(androidDir, 'gradle.properties');
+const localPropsPath = path.join(androidDir, 'local.properties');
 
 if (!fs.existsSync(androidDir)) {
   console.error('Missing android/ directory. Run "npx cap add android" first.');
@@ -60,4 +62,24 @@ if (fs.existsSync(appGradlePath)) {
   gradle = gradle.replace(/versionName\s+"[^"]+"/, `versionName "${versionName}"`);
   fs.writeFileSync(appGradlePath, gradle, 'utf8');
   console.log(`Configured app/build.gradle (versionCode=${versionCode}, versionName=${versionName})`);
+}
+
+// 4. Give Gradle JVM enough heap memory for reliable CI builds
+if (fs.existsSync(gradlePropsPath)) {
+  let props = fs.readFileSync(gradlePropsPath, 'utf8');
+  if (props.includes('org.gradle.jvmargs=')) {
+    props = props.replace(/org\.gradle\.jvmargs=.*/, 'org.gradle.jvmargs=-Xmx2048m');
+  } else {
+    props += '\norg.gradle.jvmargs=-Xmx2048m\n';
+  }
+  fs.writeFileSync(gradlePropsPath, props, 'utf8');
+  console.log('Configured gradle.properties (-Xmx2048m)');
+}
+
+// 5. Ensure android/local.properties points to ANDROID_HOME / ANDROID_SDK_ROOT when available
+const sdkDir = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+if (sdkDir && fs.existsSync(sdkDir)) {
+  const normalized = sdkDir.replace(/\\/g, '/');
+  fs.writeFileSync(localPropsPath, `sdk.dir=${normalized}\n`, 'utf8');
+  console.log(`Configured local.properties (sdk.dir=${normalized})`);
 }

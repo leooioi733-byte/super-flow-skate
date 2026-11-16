@@ -38,11 +38,41 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK & Accept Licenses
+        shell: bash
+        run: |
+          set +o pipefail
+          ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          mkdir -p "$ANDROID_SDK_DIR"
+
+          SDKMANAGER="$(find "$ANDROID_SDK_DIR" -maxdepth 4 -name "sdkmanager" -type f 2>/dev/null | head -n 1 || true)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found, downloading Android commandline-tools..."
+            mkdir -p "$ANDROID_SDK_DIR/cmdline-tools"
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-extract
+            rm -rf "$ANDROID_SDK_DIR/cmdline-tools/latest"
+            mv /tmp/cmdline-extract/cmdline-tools "$ANDROID_SDK_DIR/cmdline-tools/latest"
+            rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-extract
+            SDKMANAGER="$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+          fi
+
+          chmod +x "$SDKMANAGER"
+          echo "Using sdkmanager: $SDKMANAGER (SDK: $ANDROID_SDK_DIR)"
+
+          mkdir -p "$ANDROID_SDK_DIR/licenses"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" --licenses >/dev/null 2>&1 || true
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "platform-tools" "platforms;android-36"
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;36.0.0" || \
+            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;35.0.0" || true
+
+          echo "ANDROID_HOME=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Typecheck (tsc --noEmit)
         run: npm run lint
@@ -69,10 +99,10 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Build installable Android APK
+        working-directory: android
         run: |
-          cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Package APK file
         run: |
@@ -88,7 +118,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release (on tag or manual option)
-        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == true || github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('apk-build-{0}', github.run_number) }}
