@@ -41,35 +41,95 @@ jobs:
       - name: Configure Android SDK & Accept Licenses
         shell: bash
         run: |
+          set -e
           set +o pipefail
-          ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          mkdir -p "$ANDROID_SDK_DIR"
 
-          SDKMANAGER="$(find "$ANDROID_SDK_DIR" -maxdepth 4 -name "sdkmanager" -type f 2>/dev/null | head -n 1 || true)"
+          echo "Runner user: $(id)"
+          echo "JAVA_HOME=${JAVA_HOME:-unset}"
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found, downloading Android commandline-tools..."
+          CANDIDATE_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+
+          # Ensure a writable Android SDK directory
+          if mkdir -p "$CANDIDATE_SDK/licenses" 2>/dev/null && touch "$CANDIDATE_SDK/licenses/.wtest" 2>/dev/null; then
+            rm -f "$CANDIDATE_SDK/licenses/.wtest"
+            ANDROID_SDK_DIR="$CANDIDATE_SDK"
+          elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            echo "Granting write permissions on $CANDIDATE_SDK..."
+            sudo mkdir -p "$CANDIDATE_SDK/licenses"
+            sudo chown -R "$(id -u):$(id -g)" "$CANDIDATE_SDK"
+            ANDROID_SDK_DIR="$CANDIDATE_SDK"
+          else
+            ANDROID_SDK_DIR="$HOME/android-sdk"
+            mkdir -p "$ANDROID_SDK_DIR/licenses"
+          fi
+
+          echo "Using ANDROID_SDK_DIR=$ANDROID_SDK_DIR"
+
+          download_cmdline_tools() {
+            echo "Downloading official Google Android commandlinetools..."
             mkdir -p "$ANDROID_SDK_DIR/cmdline-tools"
-            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
+            rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-extract
+            curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip || \
+              curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip" -o /tmp/cmdline-tools.zip
             unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-extract
             rm -rf "$ANDROID_SDK_DIR/cmdline-tools/latest"
             mv /tmp/cmdline-extract/cmdline-tools "$ANDROID_SDK_DIR/cmdline-tools/latest"
             rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-extract
             SDKMANAGER="$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
+            [ -x "$SDKMANAGER" ] || chmod +x "$SDKMANAGER"
+          }
+
+          # Search ONLY cmdline-tools (never legacy tools/bin/sdkmanager which breaks on Java 21)
+          SDKMANAGER=""
+          for candidate in \
+            "$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager" \
+            "$ANDROID_SDK_DIR"/cmdline-tools/*/bin/sdkmanager; do
+            if [ -f "$candidate" ]; then
+              [ -x "$candidate" ] || chmod +x "$candidate" || true
+              if "$candidate" --sdk_root="$ANDROID_SDK_DIR" --version >/dev/null 2>&1; then
+                SDKMANAGER="$candidate"
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            download_cmdline_tools
           fi
 
-          chmod +x "$SDKMANAGER"
-          echo "Using sdkmanager: $SDKMANAGER (SDK: $ANDROID_SDK_DIR)"
+          echo "Using sdkmanager: $SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" --version
 
-          mkdir -p "$ANDROID_SDK_DIR/licenses"
+          # Pre-populate standard Android SDK licenses + accept via sdkmanager
+          printf '%s\n' \
+            '24333f8a63b6825ea9c5514f83c2829b004d1fee' \
+            '8933bad161af4178b1185d1a37fbf41ea5269c55' \
+            'd56f5187479451eabf01fb78af6dfcb131a6481e' \
+            'e9acab5b5fbb560a72cfaecce8946896ff6aab9d' \
+            > "$ANDROID_SDK_DIR/licenses/android-sdk-license"
+          printf '%s\n' '84831b9409646a918e30573bab4c9c91346d8abd' \
+            > "$ANDROID_SDK_DIR/licenses/android-sdk-preview-license"
+
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" --licenses >/dev/null 2>&1 || true
 
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "platform-tools" "platforms;android-36"
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;36.0.0" || \
-            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;35.0.0" || true
+          if [ ! -d "$ANDROID_SDK_DIR/platforms/android-36" ] || [ ! -d "$ANDROID_SDK_DIR/platform-tools" ]; then
+            if ! "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "platform-tools" "platforms;android-36"; then
+              echo "Preinstalled sdkmanager failed to install platform-tools/android-36; retrying with fresh cmdline-tools..."
+              download_cmdline_tools
+              yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" --licenses >/dev/null 2>&1 || true
+              "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "platform-tools" "platforms;android-36"
+            fi
+          fi
+
+          if [ ! -d "$ANDROID_SDK_DIR/build-tools/36.0.0" ] && [ ! -d "$ANDROID_SDK_DIR/build-tools/35.0.0" ]; then
+            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;36.0.0" || \
+              "$SDKMANAGER" --sdk_root="$ANDROID_SDK_DIR" "build-tools;35.0.0"
+          fi
 
           echo "ANDROID_HOME=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_DIR" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_DIR/platform-tools" >> "$GITHUB_PATH"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps --no-audit --no-fund
