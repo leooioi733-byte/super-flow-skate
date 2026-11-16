@@ -1,0 +1,97 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Publicar APK em uma Release do GitHub'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build FLOW SKATE APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run lint
+
+      - name: Build web bundle (Vite)
+        run: npm run build
+
+      - name: Prepare Capacitor Android project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          node scripts/configure-android.mjs
+          npx cap sync android
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('package.json', 'android/build.gradle', 'android/app/build.gradle') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build installable Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Package APK file
+        run: |
+          mkdir -p release-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk release-apk/FLOW-SKATE-android.apk
+          ls -lh release-apk/FLOW-SKATE-android.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLOW-SKATE-android-apk
+          path: release-apk/FLOW-SKATE-android.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on tag or manual option)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('apk-build-{0}', github.run_number) }}
+          name: FLOW SKATE Android APK (${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('#{0}', github.run_number) }})
+          files: release-apk/FLOW-SKATE-android.apk
+          generate_release_notes: true

@@ -1,0 +1,11 @@
+{
+  "appId": "com.flowstudios.flowskate",
+  "appName": "FLOW SKATE",
+  "webDir": "dist",
+  "backgroundColor": "#0b131d",
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}

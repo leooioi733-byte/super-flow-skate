@@ -1,0 +1,6 @@
+{
+  "name": "FLOW SKATE",
+  "description": "FLOW SKATE by Flow Studios — Stylized 3D skatepark home interface, character & board garage, career tour, and mode navigation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
